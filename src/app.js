@@ -3,6 +3,9 @@ import helmet from "helmet";
 import hpp from "hpp";
 import mongoSanitize from "express-mongo-sanitize";
 import cors from "cors";
+import mqtt from "mqtt";
+import { config } from "./db/config/index.js";
+import globalErrorHandler from "./middlewares/globalErrorHandler.js";
 
 const app = express();
 app.use(cors());
@@ -23,11 +26,11 @@ app.use(mongoSanitize());
 //  HiveMQ connection
 
 const mqttClient = mqtt.connect({
-  host: process.env.MQTT_BROKER_HOST,
+  host: config.MQTT_BROKER_HOST,
   port: 8883, // hardcode 8883 for HiveMQ TLS
   protocol: "mqtts", // mqtts = MQTT over TLS (secure)
-  username: process.env.MQTT_USERNAME,
-  password: process.env.MQTT_PASSWORD,
+  username: config.MQTT_USERNAME,
+  password: config.MQTT_PASSWORD,
   rejectUnauthorized: true, // verify SSL certificate
 });
 
