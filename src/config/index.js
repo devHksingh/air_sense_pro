@@ -1,7 +1,7 @@
 import { config as conf } from "dotenv";
 conf();
 
-const config = {
+const _config = {
   port: process.env.PORT || 6000,
   nodeEnv: process.env.NODE_ENV || "development",
   mongoUri: process.env.MONGO_URI,
@@ -13,3 +13,5 @@ const config = {
   MQTT_BROKER_PROTOCOL: process.env.MQTT_BROKER_PROTOCOL,
 
 };
+
+export const config = Object.freeze(_config);
