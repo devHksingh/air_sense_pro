@@ -4,12 +4,8 @@ import hpp from "hpp";
 import mongoSanitize from "express-mongo-sanitize";
 import cors from "cors";
 import mqtt from "mqtt";
-import axios from "axios";
-import { config } from "./config/index.js";                       
-import globalErrorHandler from "./middleware/globalErrorHandler.js"; 
-import dotenv from "dotenv";
-
-dotenv.config();
+import { config } from "./config/index.js";
+import globalErrorHandler from "./middleware/globalErrorHandler.js";
 
 const app = express();
 app.use(cors());
@@ -30,36 +26,34 @@ const TOPIC_TIME_RESPONSE = "airsense/time/response"; // Node.js -> ESP32
 const TOPIC_ANALYSIS      = "airsense/analysis";      // Node.js -> ESP32
 
 // ───────────────────────── HiveMQ Cloud connection ─────────────────────────
-// const mqttClient = mqtt.connect({
-//   host: config.MQTT_BROKER_HOST,
-//   port: config.MQTT_BROKER_PORT || 8883,
-//   protocol: config.MQTT_BROKER_PROTOCOL || "mqtts",
-//   username: config.MQTT_USERNAME,
-//   password: config.MQTT_PASSWORD,
-//   clientId: "airsense-backend-" + Math.random().toString(16).slice(2, 8),
-//   rejectUnauthorized: true,
-//   connectTimeout: 10000,
-// });
-
+// Requires .env to have:
+//   MQTT_BROKER_HOST=xxxxxxxx.s1.eu.hivemq.cloud   (host only, no "mqtts://" prefix)
+//   MQTT_BROKER_PORT=8883
+//   MQTT_BROKER_PROTOCOL=mqtts                     (must be "mqtts", NOT "mqtt" — port 8883 is TLS-only)
+//   MQTT_USERNAME=...
+//   MQTT_PASSWORD=...
 const mqttClient = mqtt.connect({
-  host: process.env.MQTT_BROKER_HOST,
-  port: 8883, // hardcode 8883 for HiveMQ TLS
-  protocol: "mqtts", // mqtts = MQTT over TLS (secure)
-  username: process.env.MQTT_USERNAME,
-  password: process.env.MQTT_PASSWORD,
-  rejectUnauthorized: true, // verify SSL certificate
-});
-
-// TEMP DIAGNOSTIC — remove once connection is stable
-console.log("MQTT config being used:", {
   host: config.MQTT_BROKER_HOST,
-  port: config.MQTT_BROKER_PORT,
-  protocol: config.MQTT_BROKER_PROTOCOL,
+  port: Number(config.MQTT_BROKER_PORT) || 8883,
+  protocol: config.MQTT_BROKER_PROTOCOL || "mqtts",
   username: config.MQTT_USERNAME,
-  passwordSet: Boolean(config.MQTT_PASSWORD),
+  password: config.MQTT_PASSWORD,
+  clientId: "airsense-backend-" + Math.random().toString(16).slice(2, 8),
+  rejectUnauthorized: true,
+  connectTimeout: 10000,
 });
 
-mqttClient.on("connect", () => console.log("Node.js connected to HiveMQ!"));
+mqttClient.on("connect", () => {
+  console.log("Node.js connected to HiveMQ!");
+  mqttClient.subscribe([TOPIC_SENSOR_DATA, TOPIC_TIME_REQUEST], { qos: 1 }, (err) => {
+    if (err) {
+      console.error("Failed to subscribe:", err);
+    } else {
+      console.log(`Subscribed to: ${TOPIC_SENSOR_DATA}, ${TOPIC_TIME_REQUEST}`);
+    }
+  });
+});
+
 mqttClient.on("reconnect", () => console.log("MQTT reconnecting..."));
 mqttClient.on("close", () => console.log("MQTT connection closed"));
 mqttClient.on("offline", () => console.log("MQTT client went offline"));
@@ -69,17 +63,48 @@ mqttClient.on("error", (err) => {
   if (err.code) console.error("MQTT error code:", err.code);
 });
 
-// ───────────────────────── Time helpers (timeapi.io, Asia/Kolkata) ─────────────────────────
+// ───────────────────────── Time helpers (server's own system clock, IST) ─────────────────────────
+// NOTE: switched away from timeapi.io — observed returning stale time
+// (lagging real time by ~13 min). The Node.js server's own system clock is
+// NTP-synced by the host/OS and works correctly regardless of which region
+// the server is physically deployed in (e.g. Render, even outside India),
+// because Intl.DateTimeFormat's `timeZone` option does the IST conversion
+// explicitly rather than relying on the container's local/default timezone.
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
 const pad2 = (v) => String(v).padStart(2, "0");
 
-// Adds exactly 2 minute using UTC-based date math so month/year/leap-year
-// rollovers (e.g. syncing at 23:59:xx) are handled correctly, independent
-// of the server's own local timezone.
+function getIndianTimeParts() {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    weekday: "long",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const get = (type) => parts.find((p) => p.type === type).value;
+
+  return {
+    y: Number(get("year")),
+    mo: Number(get("month")),
+    d: Number(get("day")),
+    h: Number(get("hour")),
+    mi: Number(get("minute")),
+    s: Number(get("second")),
+    weekday: get("weekday"),
+  };
+}
+
+// Adds exactly 1 minute using UTC-based date math so month/year/leap-year
+// rollovers (e.g. syncing at 23:59:xx) are handled correctly.
 function addOneMinute(y, mo, d, h, mi, s) {
-  const asUTC = Date.UTC(y, mo - 1, d, h, mi, Math.floor(s));
-  const bumped = new Date(asUTC + 60 *60* 1000);
+  const asUTC = Date.UTC(y, mo - 1, d, h, mi, s);
+  const bumped = new Date(asUTC + 60 * 1000);
   return {
     y: bumped.getUTCFullYear(),
     mo: bumped.getUTCMonth() + 1,
@@ -98,31 +123,89 @@ function formatTime12(h, mi) {
 }
 
 async function getCurrentIndianTime() {
-  try {
-    const { data } = await axios.get(
-      "https://timeapi.io/api/v1/time/current/zone",
-      { params: { timezone: "Asia/Kolkata" }, timeout: 5000 }
-    );
-    // data.date = "2026-07-27", data.time = "21:32:19.051355"
-    const [y, mo, d] = data.date.split("-").map(Number);
-    const [hh, mm, ss] = data.time.split(":");
-    const bumped = addOneMinute(y, mo, d, Number(hh), Number(mm), Number(ss));
+  const raw = getIndianTimeParts();
+  const bumped = addOneMinute(raw.y, raw.mo, raw.d, raw.h, raw.mi, raw.s);
 
-    return {
-      mqtt: { y: bumped.y, mo: bumped.mo, d: bumped.d, h: bumped.h, mi: bumped.mi, s: bumped.s },
-      display: {
-        day: bumped.weekday,
-        date: `${pad2(bumped.d)}-${pad2(bumped.mo)}-${bumped.y}`,
-        time12: formatTime12(bumped.h, bumped.mi),
-        time24: `${pad2(bumped.h)}:${pad2(bumped.mi)} hrs`,
-      },
-    };
-  } catch (err) {
-    console.error("Failed to fetch time from timeapi.io:", err.message);
-    return null; // caller must skip publishing; ESP32 already retries on its own
-  }
+  return {
+    mqtt: { y: bumped.y, mo: bumped.mo, d: bumped.d, h: bumped.h, mi: bumped.mi, s: bumped.s },
+    display: {
+      day: bumped.weekday,
+      date: `${pad2(bumped.d)}-${pad2(bumped.mo)}-${bumped.y}`,
+      time12: formatTime12(bumped.h, bumped.mi),
+      time24: `${pad2(bumped.h)}:${pad2(bumped.mi)} hrs`,
+    },
+  };
 }
 
-export { mqttClient, TOPIC_SENSOR_DATA, TOPIC_SENSOR_ACK, TOPIC_TIME_REQUEST, TOPIC_TIME_RESPONSE, TOPIC_ANALYSIS, getCurrentIndianTime };
+// ───────────────────────── Analysis indicators (Section 5 thresholds) ─────────────────────────
+function computeAnalysis(reading) {
+  const { eco2, bmeTemp, bmeHum } = reading;
+
+  const isAirQualityGood      = eco2 <= 800;
+  const isVentilationNeeded   = eco2 > 1000;
+  const isTempExtreme         = bmeTemp < 10 || bmeTemp > 40;
+  const isComfortableHumidity = bmeHum >= 30 && bmeHum <= 60;
+  const isOutdoorActivityOk   = !isTempExtreme && isComfortableHumidity;
+
+  return {
+    airGood:   isAirQualityGood ? 1 : 0,
+    needVent:  isVentilationNeeded ? 1 : 0,
+    humiOk:    isComfortableHumidity ? 1 : 0,
+    tempExt:   isTempExtreme ? 1 : 0,
+    outdoorOk: isOutdoorActivityOk ? 1 : 0,
+  };
+}
+
+// ───────────────────────── MQTT message routing ─────────────────────────
+mqttClient.on("message", async (topic, messageBuf) => {
+  const raw = messageBuf.toString();
+
+  if (topic === TOPIC_TIME_REQUEST) {
+    console.log("Time sync requested by ESP32");
+    const time = await getCurrentIndianTime();
+    mqttClient.publish(TOPIC_TIME_RESPONSE, JSON.stringify(time.mqtt));
+    console.log("Published time response:", time.mqtt);
+    return;
+  }
+
+  if (topic === TOPIC_SENSOR_DATA) {
+    let reading;
+    try {
+      reading = JSON.parse(raw);
+    } catch (err) {
+      console.error("Malformed sensor data JSON, dropping:", raw);
+      return;
+    }
+
+    if (!reading.ts) {
+      console.error("Sensor payload missing 'ts', cannot ack, dropping:", reading);
+      return;
+    }
+
+    console.log("Sensor data received:", reading);
+
+    // TODO: persist `reading` to MongoDB once src/sensor/sensorModel.js exists.
+    // Ack is sent below regardless, per the handoff doc's application-level
+    // delivery confirmation design (Section 5).
+
+    mqttClient.publish(TOPIC_SENSOR_ACK, JSON.stringify({ ts: reading.ts }));
+    console.log("Ack sent for ts:", reading.ts);
+
+    const analysis = computeAnalysis(reading);
+    mqttClient.publish(TOPIC_ANALYSIS, JSON.stringify(analysis));
+    console.log("Analysis published:", analysis);
+  }
+});
+
+// ───────────────────────── REST API routes ─────────────────────────
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Welcome to air sense app",
+  });
+});
+
+// Global error handler (must be last)
+app.use(globalErrorHandler);
 
 export default app;
