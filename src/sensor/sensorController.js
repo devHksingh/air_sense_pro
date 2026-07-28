@@ -21,12 +21,42 @@ const getLatestReading = async (req, res, next) => {
 };
 
 // GET /api/sensor/history?from=<ISO date>&to=<ISO date>&limit=<n>
+// const getHistory = async (req, res, next) => {
+//   try {
+//     const { from, to } = req.query;
+//     let limit = parseInt(req.query.limit, 10);
+//     if (Number.isNaN(limit) || limit <= 0) limit = 200;
+//     if (limit > 1000) limit = 1000; // hard cap to protect the API/dashboard from an accidental huge query
+
+//     const filter = {};
+//     if (from || to) {
+//       filter.ts = {};
+//       if (from) filter.ts.$gte = new Date(from);
+//       if (to) filter.ts.$lte = new Date(to);
+//     }
+
+//     const history = await SensorReading.find(filter)
+//       .sort({ ts: 1 }) // ascending — natural order for charting on the dashboard
+//       .limit(limit)
+//       .lean();
+
+//     res.status(200).json({
+//       success: true,
+//       message: "Sensor history fetched",
+//       count: history.length,
+//       data: history,
+//     });
+//   } catch (err) {
+//     next(createHttpError(500, "Failed to fetch sensor history"));
+//   }
+// };
+// GET /api/sensor/history?from=<ISO date>&to=<ISO date>&limit=<n>
 const getHistory = async (req, res, next) => {
   try {
     const { from, to } = req.query;
     let limit = parseInt(req.query.limit, 10);
     if (Number.isNaN(limit) || limit <= 0) limit = 200;
-    if (limit > 1000) limit = 1000; // hard cap to protect the API/dashboard from an accidental huge query
+    if (limit > 15000) limit = 15000; // CHANGED: was 1000 — 7 days at real device cadence (~1,894 readings/day) needs headroom up to ~13,260
 
     const filter = {};
     if (from || to) {
@@ -36,7 +66,7 @@ const getHistory = async (req, res, next) => {
     }
 
     const history = await SensorReading.find(filter)
-      .sort({ ts: 1 }) // ascending — natural order for charting on the dashboard
+      .sort({ ts: 1 })
       .limit(limit)
       .lean();
 
