@@ -23,6 +23,7 @@
     "http-errors": "^2.0.1",
     "mongoose": "^9.8.0",
     "mqtt": "^5.15.2",
+    "node-cron": "^4.6.0",
     "nodemon": "^3.1.14"
   }
 }
