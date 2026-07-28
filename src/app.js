@@ -1,8 +1,7 @@
 import express from "express";
 import helmet from "helmet";
-import hpp from "hpp";
-import mongoSanitize from "express-mongo-sanitize";
 import cors from "cors";
+import sanitizeRequest from "./middleware/sanitize.js";
 import mqtt from "mqtt";
 import { config } from "./config/index.js";
 import globalErrorHandler from "./middleware/globalErrorHandler.js";
@@ -16,8 +15,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // security middleware
 app.use(helmet());
-app.use(hpp());
-app.use(mongoSanitize());
+app.use(sanitizeRequest);
 
 // ───────────────────────── AirSense Pro MQTT topics ─────────────────────────
 // These must match the ESP32 sketch exactly (handoff doc, Section 5)
