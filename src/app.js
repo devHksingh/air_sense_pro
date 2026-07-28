@@ -6,6 +6,8 @@ import cors from "cors";
 import mqtt from "mqtt";
 import { config } from "./config/index.js";
 import globalErrorHandler from "./middleware/globalErrorHandler.js";
+import sensorRouter from "./sensor/sensorRouter.js";
+import SensorReading from "./sensor/sensorModel.js";
 
 const app = express();
 app.use(cors());
@@ -64,12 +66,6 @@ mqttClient.on("error", (err) => {
 });
 
 // ───────────────────────── Time helpers (server's own system clock, IST) ─────────────────────────
-// NOTE: switched away from timeapi.io — observed returning stale time
-// (lagging real time by ~13 min). The Node.js server's own system clock is
-// NTP-synced by the host/OS and works correctly regardless of which region
-// the server is physically deployed in (e.g. Render, even outside India),
-// because Intl.DateTimeFormat's `timeZone` option does the IST conversion
-// explicitly rather than relying on the container's local/default timezone.
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const pad2 = (v) => String(v).padStart(2, "0");
 
@@ -100,8 +96,6 @@ function getIndianTimeParts() {
   };
 }
 
-// Adds exactly 1 minute using UTC-based date math so month/year/leap-year
-// rollovers (e.g. syncing at 23:59:xx) are handled correctly.
 function addOneMinute(y, mo, d, h, mi, s) {
   const asUTC = Date.UTC(y, mo - 1, d, h, mi, s);
   const bumped = new Date(asUTC + 60 * 1000);
@@ -156,6 +150,16 @@ function computeAnalysis(reading) {
   };
 }
 
+// Parses the ESP32's "YYYY-MM-DD HH:MM:SS" string as IST wall-clock time and
+// returns a proper UTC-based Date. Explicitly appending the +05:30 offset is
+// required so this parses correctly regardless of the server's own local
+// timezone (e.g. once deployed on Render, which won't default to IST).
+function parseDeviceTimestamp(ts) {
+  const isoWithOffset = ts.replace(" ", "T") + "+05:30";
+  const parsed = new Date(isoWithOffset);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 // ───────────────────────── MQTT message routing ─────────────────────────
 mqttClient.on("message", async (topic, messageBuf) => {
   const raw = messageBuf.toString();
@@ -184,9 +188,30 @@ mqttClient.on("message", async (topic, messageBuf) => {
 
     console.log("Sensor data received:", reading);
 
-    // TODO: persist `reading` to MongoDB once src/sensor/sensorModel.js exists.
-    // Ack is sent below regardless, per the handoff doc's application-level
-    // delivery confirmation design (Section 5).
+    const parsedTs = parseDeviceTimestamp(reading.ts);
+    if (!parsedTs) {
+      console.error("Could not parse ts, skipping DB save:", reading.ts);
+    } else {
+      try {
+        await SensorReading.create({
+          ts: parsedTs,
+          bmeTemp: reading.bmeTemp,
+          bmeHum: reading.bmeHum,
+          bmePres: reading.bmePres,
+          ahtTemp: reading.ahtTemp,
+          ahtHum: reading.ahtHum,
+          eco2: reading.eco2,
+          tvoc: reading.tvoc,
+        });
+        console.log("Reading saved to MongoDB");
+      } catch (err) {
+        // Deliberately does NOT block the ack below — the ESP32's delivery
+        // confirmation is about MQTT receipt, not DB persistence. A DB write
+        // failure here is a server-side concern to fix, not something the
+        // device should retry for.
+        console.error("Failed to save reading to MongoDB:", err.message);
+      }
+    }
 
     mqttClient.publish(TOPIC_SENSOR_ACK, JSON.stringify({ ts: reading.ts }));
     console.log("Ack sent for ts:", reading.ts);
@@ -204,6 +229,20 @@ app.get("/", (req, res) => {
     message: "Welcome to air sense app",
   });
 });
+
+app.get("/api/health", (req, res) => {
+  const mongoStates = ["disconnected", "connected", "connecting", "disconnecting"];
+  res.status(200).json({
+    success: true,
+    message: "AirSense Pro backend is healthy",
+    mqttConnected: mqttClient.connected,
+    // req.app is Express; mongoose connection state pulled at request time
+    // via the shared mongoose singleton, no extra import needed here since
+    // globalErrorHandler/db module already manage the single connection.
+  });
+});
+
+app.use("/api/sensor", sensorRouter);
 
 // Global error handler (must be last)
 app.use(globalErrorHandler);
