@@ -19,11 +19,11 @@ app.use(sanitizeRequest);
 
 // ───────────────────────── AirSense Pro MQTT topics ─────────────────────────
 // These must match the ESP32 sketch exactly (handoff doc, Section 5)
-const TOPIC_SENSOR_DATA   = "airsense/sensor/data";   // ESP32 -> Node.js
-const TOPIC_SENSOR_ACK    = "airsense/sensor/ack";    // Node.js -> ESP32
-const TOPIC_TIME_REQUEST  = "airsense/time/request";  // ESP32 -> Node.js
+const TOPIC_SENSOR_DATA = "airsense/sensor/data"; // ESP32 -> Node.js
+const TOPIC_SENSOR_ACK = "airsense/sensor/ack"; // Node.js -> ESP32
+const TOPIC_TIME_REQUEST = "airsense/time/request"; // ESP32 -> Node.js
 const TOPIC_TIME_RESPONSE = "airsense/time/response"; // Node.js -> ESP32
-const TOPIC_ANALYSIS      = "airsense/analysis";      // Node.js -> ESP32
+const TOPIC_ANALYSIS = "airsense/analysis"; // Node.js -> ESP32
 
 // ───────────────────────── HiveMQ Cloud connection ─────────────────────────
 // Requires .env to have:
@@ -45,13 +45,19 @@ const mqttClient = mqtt.connect({
 
 mqttClient.on("connect", () => {
   console.log("Node.js connected to HiveMQ!");
-  mqttClient.subscribe([TOPIC_SENSOR_DATA, TOPIC_TIME_REQUEST], { qos: 1 }, (err) => {
-    if (err) {
-      console.error("Failed to subscribe:", err);
-    } else {
-      console.log(`Subscribed to: ${TOPIC_SENSOR_DATA}, ${TOPIC_TIME_REQUEST}`);
-    }
-  });
+  mqttClient.subscribe(
+    [TOPIC_SENSOR_DATA, TOPIC_TIME_REQUEST],
+    { qos: 1 },
+    (err) => {
+      if (err) {
+        console.error("Failed to subscribe:", err);
+      } else {
+        console.log(
+          `Subscribed to: ${TOPIC_SENSOR_DATA}, ${TOPIC_TIME_REQUEST}`,
+        );
+      }
+    },
+  );
 });
 
 mqttClient.on("reconnect", () => console.log("MQTT reconnecting..."));
@@ -64,7 +70,15 @@ mqttClient.on("error", (err) => {
 });
 
 // ───────────────────────── Time helpers (server's own system clock, IST) ─────────────────────────
-const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 const pad2 = (v) => String(v).padStart(2, "0");
 
 function getIndianTimeParts() {
@@ -119,7 +133,14 @@ async function getCurrentIndianTime() {
   const bumped = addOneMinute(raw.y, raw.mo, raw.d, raw.h, raw.mi, raw.s);
 
   return {
-    mqtt: { y: bumped.y, mo: bumped.mo, d: bumped.d, h: bumped.h, mi: bumped.mi, s: bumped.s },
+    mqtt: {
+      y: bumped.y,
+      mo: bumped.mo,
+      d: bumped.d,
+      h: bumped.h,
+      mi: bumped.mi,
+      s: bumped.s,
+    },
     display: {
       day: bumped.weekday,
       date: `${pad2(bumped.d)}-${pad2(bumped.mo)}-${bumped.y}`,
@@ -133,17 +154,17 @@ async function getCurrentIndianTime() {
 function computeAnalysis(reading) {
   const { eco2, bmeTemp, bmeHum } = reading;
 
-  const isAirQualityGood      = eco2 <= 800;
-  const isVentilationNeeded   = eco2 > 1000;
-  const isTempExtreme         = bmeTemp < 10 || bmeTemp > 40;
+  const isAirQualityGood = eco2 <= 800;
+  const isVentilationNeeded = eco2 > 1000;
+  const isTempExtreme = bmeTemp < 10 || bmeTemp > 40;
   const isComfortableHumidity = bmeHum >= 30 && bmeHum <= 60;
-  const isOutdoorActivityOk   = !isTempExtreme && isComfortableHumidity;
+  const isOutdoorActivityOk = !isTempExtreme && isComfortableHumidity;
 
   return {
-    airGood:   isAirQualityGood ? 1 : 0,
-    needVent:  isVentilationNeeded ? 1 : 0,
-    humiOk:    isComfortableHumidity ? 1 : 0,
-    tempExt:   isTempExtreme ? 1 : 0,
+    airGood: isAirQualityGood ? 1 : 0,
+    needVent: isVentilationNeeded ? 1 : 0,
+    humiOk: isComfortableHumidity ? 1 : 0,
+    tempExt: isTempExtreme ? 1 : 0,
     outdoorOk: isOutdoorActivityOk ? 1 : 0,
   };
 }
@@ -180,7 +201,10 @@ mqttClient.on("message", async (topic, messageBuf) => {
     }
 
     if (!reading.ts) {
-      console.error("Sensor payload missing 'ts', cannot ack, dropping:", reading);
+      console.error(
+        "Sensor payload missing 'ts', cannot ack, dropping:",
+        reading,
+      );
       return;
     }
 
@@ -229,7 +253,12 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  const mongoStates = ["disconnected", "connected", "connecting", "disconnecting"];
+  const mongoStates = [
+    "disconnected",
+    "connected",
+    "connecting",
+    "disconnecting",
+  ];
   res.status(200).json({
     success: true,
     message: "AirSense Pro backend is healthy",
