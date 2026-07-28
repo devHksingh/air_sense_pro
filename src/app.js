@@ -151,6 +151,9 @@ async function getCurrentIndianTime() {
 }
 
 // ───────────────────────── Analysis indicators (Section 5 thresholds) ─────────────────────────
+let latestAnalysis = null;
+let latestAnalysisTs = null;
+
 function computeAnalysis(reading) {
   const { eco2, bmeTemp, bmeHum } = reading;
 
@@ -240,6 +243,8 @@ mqttClient.on("message", async (topic, messageBuf) => {
 
     const analysis = computeAnalysis(reading);
     mqttClient.publish(TOPIC_ANALYSIS, JSON.stringify(analysis));
+    latestAnalysis = analysis; // ADDED
+    latestAnalysisTs = reading.ts; // ADDED
     console.log("Analysis published:", analysis);
   }
 });
@@ -266,6 +271,21 @@ app.get("/api/health", (req, res) => {
     // req.app is Express; mongoose connection state pulled at request time
     // via the shared mongoose singleton, no extra import needed here since
     // globalErrorHandler/db module already manage the single connection.
+  });
+});
+
+app.get("/api/analysis/latest", (req, res) => {
+  if (!latestAnalysis) {
+    return res.status(404).json({
+      success: false,
+      message: "No analysis available yet - waiting for first sensor reading",
+    });
+  }
+  res.status(200).json({
+    success: true,
+    message: "Latest analysis fetched",
+    ts: latestAnalysisTs,
+    data: latestAnalysis,
   });
 });
 
